@@ -1,3 +1,5 @@
+import java.util.HashMap;
+import java.util.Map;
 
 public class Fila {
 
@@ -9,11 +11,12 @@ public class Fila {
     private double maxService;
     private int customers;
     private int loss;
-    private double[] times;
+    private Map<Integer, Double> timesMap = new HashMap<>();
+    private final String nomeFila;
 
-    public Fila(int servers, int capacity,
-            double minArrival, double maxArrival,
-            double minService, double maxService) {
+    public Fila(String nomeFila, int servers, int capacity,
+                double minArrival, double maxArrival,
+                double minService, double maxService) {
         this.servers = servers;
         this.capacity = capacity;
         this.minArrival = minArrival;
@@ -22,7 +25,11 @@ public class Fila {
         this.maxService = maxService;
         this.customers = 0;
         this.loss = 0;
-        this.times = new double[capacity + 1];
+        this.nomeFila = nomeFila;
+    }
+
+    public String getNomeFila() {
+        return nomeFila;
     }
 
     public int status() {
@@ -39,10 +46,6 @@ public class Fila {
 
     public int loss() {
         return loss;
-    }
-
-    public double[] times() {
-        return times;
     }
 
     public double minArrival() {
@@ -73,9 +76,12 @@ public class Fila {
         customers--;
     }
 
+    public Map<Integer, Double> getTimesMap() {
+        return timesMap;
+    }
+
     public void acumulaTempo(double delta) {
-        if (customers <= capacity) {
-            times[customers] += delta;
-        }
+        double tempoAcumulado = timesMap.getOrDefault(customers, 0.0);
+        timesMap.put(customers, tempoAcumulado + delta);
     }
 }

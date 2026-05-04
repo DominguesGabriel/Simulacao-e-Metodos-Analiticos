@@ -1,25 +1,8 @@
 
-import java.util.PriorityQueue;
+import java.util.*;
 
 public class Simulador {
-
-    static final int F1_SERVERS = 2;
-    static final int F1_CAPACITY = 3;
-    static final double F1_MIN_ARR = 1.0;
-    static final double F1_MAX_ARR = 4.0;
-    static final double F1_MIN_SRV = 3.0;
-    static final double F1_MAX_SRV = 4.0;
-
-    static final int F2_SERVERS = 1;
-    static final int F2_CAPACITY = 5;
-    static final double F2_MIN_ARR = 0.0;
-    static final double F2_MAX_ARR = 0.0;
-    static final double F2_MIN_SRV = 2.0;
-    static final double F2_MAX_SRV = 3.0;
-
-    static final double PRIMEIRO_CLIENTE = 1.5;
-
-    static Fila fila1, fila2;
+    static Map<String, Fila> filas = new HashMap<>();
     static PriorityQueue<Evento> escalonador = new PriorityQueue<>();
     static GeradorLgc gerador;
     static double tempoAtual = 0.0;
@@ -38,31 +21,25 @@ public class Simulador {
 
         gerador = new GeradorLgc(semente);
 
-        fila1 = new Fila(F1_SERVERS, F1_CAPACITY,
-                F1_MIN_ARR, F1_MAX_ARR,
-                F1_MIN_SRV, F1_MAX_SRV);
-
-        fila2 = new Fila(F2_SERVERS, F2_CAPACITY,
-                F2_MIN_ARR, F2_MAX_ARR,
-                F2_MIN_SRV, F2_MAX_SRV);
+        filas.put("Fila1", new Fila("Fila1", 1, Integer.MAX_VALUE, 2.0, 4.0, 1.0, 2.0));
+        filas.put("Fila2", new Fila("Fila2", 2, 5, 0.0, 0.0, 4.0, 6.0));
+        filas.put("Fila3", new Fila("Fila3", 2, 10, 0.0, 0.0, 5.0, 15.0));
 
         // Agenda a primeira chegada
-        escalonador.add(new Evento(Evento.CHEGADA, PRIMEIRO_CLIENTE));
+        tempoAtual = 0.0;
+        escalonador.add(new Evento(Evento.CHEGADA, 2.0, "Fila1"));
 
-        // Loop principal
-        while (gerador.getCount() < maxAleatorios && !escalonador.isEmpty()) {
+        // Loop Principal
+        while (!escalonador.isEmpty() && gerador.getCount() < maxAleatorios) {
             Evento ev = escalonador.poll();
 
-            // Acumula tempo em ambas as filas antes de processar evento
             acumulaTempo(ev.getTempo() - tempoAtual);
             tempoAtual = ev.getTempo();
 
             if (ev.getTipo() == Evento.CHEGADA) {
-                chegada(ev); 
-            }else if (ev.getTipo() == Evento.SAIDA) {
-                saida(ev); 
-            }else if (ev.getTipo() == Evento.PASSAGEM) {
-                passagem(ev);
+                processarChegada(ev);
+            } else if (ev.getTipo() == Evento.SAIDA) {
+                processarSaida(ev);
             }
         }
 
@@ -73,103 +50,116 @@ public class Simulador {
         if (delta <= 0) {
             return;
         }
-        fila1.acumulaTempo(delta);
-        fila2.acumulaTempo(delta);
+
+        for (Fila f : filas.values()) {
+            f.acumulaTempo(delta);
+        }
     }
 
-    static void chegada(Evento ev) {
-        // Agenda a próxima chegada (usa 1 aleatório)
+    static void processarChegada(Evento ev) {
+        Fila f = filas.get(ev.getNomeFila());
+
+        if (ev.getNomeFila().equals("Fila1") && gerador.getCount() < maxAleatorios) {
+            double proximaChegada = tempoAtual + gerador.intervalo(f.minArrival(), f.maxArrival());
+            escalonador.add(new Evento(Evento.CHEGADA, proximaChegada, "Fila1"));
+        }
+
+        if (f.status() < f.capacity()) {
+            f.in();
+            // Se o servidor estava ocioso, agenda o início do serviço (SAIDA)
+            if (f.status() <= f.servers()) {
+                if (gerador.getCount() < maxAleatorios) {
+                    double fimServico = tempoAtual + gerador.intervalo(f.minService(), f.maxService());
+                    escalonador.add(new Evento(Evento.SAIDA, fimServico, f.getNomeFila()));
+                }
+            }
+        } else {
+            f.contaPerda();
+        }
+    }
+
+    static String sortearProximoDestino(String origem) {
+        double rnd = gerador.proximo();
+
+        switch (origem) {
+            case "Fila1":
+                return (rnd <= 0.8) ? "Fila2" : "Fila3";
+
+            case "Fila2":
+                if (rnd <= 0.3) return "Fila1";
+                if (rnd <= 0.8) return "Fila2";
+                return null;
+
+            case "Fila3":
+                if (rnd <= 0.7) return "Fila2";
+                return null;
+
+            default:
+                return null;
+        }
+    }
+
+    static void processarSaida(Evento ev) {
+        Fila origem = filas.get(ev.getNomeFila());
+        origem.out();
+
+        if (origem.status() >= origem.servers()) {
+            if (gerador.getCount() < maxAleatorios) {
+                double tempoServico = tempoAtual + gerador.intervalo(origem.minService(), origem.maxService());
+                escalonador.add(new Evento(Evento.SAIDA, tempoServico, origem.getNomeFila()));
+            }
+        }
+
         if (gerador.getCount() < maxAleatorios) {
-            double proxChegada = tempoAtual
-                    + gerador.intervalo(fila1.minArrival(), fila1.maxArrival());
-            escalonador.add(new Evento(Evento.CHEGADA, proxChegada));
-        }
+            String nomeDestino = sortearProximoDestino(origem.getNomeFila());
 
-        if (fila1.status() < fila1.capacity()) {
-            fila1.in();
-            // Se há servidor livre, agenda atendimento (usa 1 aleatório)
-            if (fila1.status() <= fila1.servers()) {
-                if (gerador.getCount() < maxAleatorios) {
-                    double fimAtendimento = tempoAtual
-                            + gerador.intervalo(fila1.minService(), fila1.maxService());
-                    // Ao sair da fila1, o cliente vai para fila2 (PASSAGEM)
-                    escalonador.add(new Evento(Evento.PASSAGEM, fimAtendimento));
+            if (nomeDestino != null) {
+                Fila destino = filas.get(nomeDestino);
+
+                if (destino.status() < destino.capacity()) {
+                    destino.in();
+                    if (destino.status() <= destino.servers()) {
+                        if (gerador.getCount() < maxAleatorios) {
+                            double tempoServicoDest = tempoAtual + gerador.intervalo(destino.minService(), destino.maxService());
+                            escalonador.add(new Evento(Evento.SAIDA, tempoServicoDest, destino.getNomeFila()));
+                        }
+                    }
+                } else {
+                    destino.contaPerda();
                 }
-            }
-        } else {
-            fila1.contaPerda();
-        }
-    }
-
-    static void passagem(Evento ev) {
-        fila1.out();
-
-        // Libera servidor na fila1: atende próximo se houver fila
-        if (fila1.status() >= fila1.servers()) {
-            if (gerador.getCount() < maxAleatorios) {
-                double fimAtendimento = tempoAtual
-                        + gerador.intervalo(fila1.minService(), fila1.maxService());
-                escalonador.add(new Evento(Evento.PASSAGEM, fimAtendimento));
-            }
-        }
-
-        // Tenta entrar na Fila 2
-        if (fila2.status() < fila2.capacity()) {
-            fila2.in();
-            if (fila2.status() <= fila2.servers()) {
-                if (gerador.getCount() < maxAleatorios) {
-                    double fimAtendimento = tempoAtual
-                            + gerador.intervalo(fila2.minService(), fila2.maxService());
-                    escalonador.add(new Evento(Evento.SAIDA, fimAtendimento));
-                }
-            }
-        } else {
-            fila2.contaPerda();
-        }
-    }
-
-    static void saida(Evento ev) {
-        fila2.out();
-
-        // Libera servidor: atende próximo se houver fila
-        if (fila2.status() >= fila2.servers()) {
-            if (gerador.getCount() < maxAleatorios) {
-                double fimAtendimento = tempoAtual
-                        + gerador.intervalo(fila2.minService(), fila2.maxService());
-                escalonador.add(new Evento(Evento.SAIDA, fimAtendimento));
             }
         }
     }
 
     static void imprimirResultados() {
-        System.out.println("=".repeat(60));
-        System.out.println("   SIMULADOR DE FILAS EM TANDEM");
-        System.out.println("=".repeat(60));
-        System.out.printf("Aleatórios utilizados : %d%n", gerador.getCount());
-        System.out.printf("Tempo global da simulação: %.4f%n%n", tempoAtual);
+        System.out.println("Tempo global da simulação: " + tempoAtual);
+        System.out.println("Aleatórios utilizados: " + gerador.getCount());
 
-        imprimirFila("FILA 1 [G/G/" + F1_SERVERS + "/" + F1_CAPACITY + "]", fila1);
-        imprimirFila("FILA 2 [G/G/" + F2_SERVERS + "/" + F2_CAPACITY + "]", fila2);
+        for (String nomeFila : filas.keySet()) {
+            Fila f = filas.get(nomeFila);
+            imprimirFila(nomeFila, f); // Reutiliza sua lógica de imprimirFila
+        }
     }
 
     static void imprimirFila(String nome, Fila fila) {
-        double[] times = fila.times();
-        double total = 0;
-        for (double t : times) {
-            total += t;
+        Map<Integer, Double> times = fila.getTimesMap();
+        double totalTempoFila = 0;
+
+        for (double t : times.values()) {
+            totalTempoFila += t;
         }
 
-        System.out.println("-".repeat(60));
-        System.out.println("  " + nome);
-        System.out.println("-".repeat(60));
-        System.out.printf("  Perdas: %d%n", fila.loss());
-        System.out.printf("  %-8s %-18s %-12s%n", "Estado", "Tempo Acumulado", "Probabilidade");
-        System.out.printf("  %-8s %-18s %-12s%n", "------", "---------------", "------------");
+        System.out.println("Fila: " + nome);
+        System.out.printf("%-10s %-20s %-15s%n", "Estado", "Tempo", "Probabilidade");
 
-        for (int i = 0; i <= fila.capacity(); i++) {
-            double prob = (total > 0) ? times[i] / total : 0.0;
-            System.out.printf("  %-8d %-18.4f %-12.6f%n", i, times[i], prob);
+        List<Integer> estados = new ArrayList<>(times.keySet());
+        Collections.sort(estados);
+
+        for (Integer estado : estados) {
+            double tempo = times.get(estado);
+            double prob = tempo / totalTempoFila;
+            System.out.printf("%-10d %-20.4f %-15.6f%n", estado, tempo, prob);
         }
-        System.out.printf("  %s%n  Total: %.4f%n%n", "-".repeat(40), total);
+        System.out.println("Perdas: " + fila.loss());
     }
 }

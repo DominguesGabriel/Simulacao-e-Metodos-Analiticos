@@ -7,10 +7,12 @@ public class Evento implements Comparable<Evento> {
 
     private int tipo;
     private double tempo;
+    private String nomeFila;
 
-    public Evento(int tipo, double tempo) {
+    public Evento(int tipo, double tempo, String nomeFila) {
         this.tipo = tipo;
         this.tempo = tempo;
+        this.nomeFila = nomeFila;
     }
 
     public int getTipo() {
@@ -19,6 +21,10 @@ public class Evento implements Comparable<Evento> {
 
     public double getTempo() {
         return tempo;
+    }
+
+    public String getNomeFila() {
+        return nomeFila;
     }
 
     @Override
