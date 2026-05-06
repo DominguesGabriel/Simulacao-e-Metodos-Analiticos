@@ -1,7 +1,7 @@
 # Simulador de Filas
 
 **Disciplina:** Simulação e Métodos Analíticos  
-**Atividade:** M6 — Simulação de Filas em Tandem
+**Atividade:** T1 — Rede de Filas
 
 ## 👥 Integrantes do Grupo
 
