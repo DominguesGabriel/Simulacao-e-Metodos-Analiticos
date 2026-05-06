@@ -1,49 +1,102 @@
-
-import java.util.*;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.PriorityQueue;
 
 public class Simulador {
-    static Map<String, Fila> filas = new HashMap<>();
+    static Map<String, Fila> filas = new LinkedHashMap<>();
     static PriorityQueue<Evento> escalonador = new PriorityQueue<>();
     static GeradorLgc gerador;
+    static ModeloSimulacao modelo;
     static double tempoAtual = 0.0;
     static int maxAleatorios;
 
     public static void main(String[] args) {
-        long semente = 51232312;
-        maxAleatorios = 100_000;
-
-        if (args.length >= 1) {
-            semente = Long.parseLong(args[0]);
-        }
-        if (args.length >= 2) {
-            maxAleatorios = Integer.parseInt(args[1]);
+        if (args.length != 1) {
+            System.out.println("Uso: java -cp .\\src Simulador <arquivo.yml>");
+            return;
         }
 
-        gerador = new GeradorLgc(semente);
+        String caminhoModelo = args[0];
+        modelo = LeitorModeloYaml.ler(caminhoModelo);
 
-        filas.put("Fila1", new Fila("Fila1", 1, Integer.MAX_VALUE, 2.0, 4.0, 1.0, 2.0));
-        filas.put("Fila2", new Fila("Fila2", 2, 5, 0.0, 0.0, 4.0, 6.0));
-        filas.put("Fila3", new Fila("Fila3", 2, 10, 0.0, 0.0, 5.0, 15.0));
+        if (modelo.usaSementes()) {
+            for (Long semente : modelo.getSementes()) {
+                executarSimulacao(new GeradorLgc(semente), modelo.getRndnumbersPerSeed(),
+                        "Semente: " + semente);
+            }
+        } else if (!modelo.getRndnumbers().isEmpty()) {
+            executarSimulacao(new GeradorLgc(modelo.getRndnumbers()), modelo.getRndnumbers().size(),
+                    "Numeros aleatorios do arquivo");
+        } else {
+            throw new IllegalArgumentException("O arquivo YAML precisa declarar seeds ou rndnumbers.");
+        }
+    }
 
-        // Agenda a primeira chegada
+    static void executarSimulacao(GeradorLgc geradorDaRodada, int limiteAleatorios, String titulo) {
+        filas = new LinkedHashMap<>();
+        escalonador = new PriorityQueue<>();
+        gerador = geradorDaRodada;
+        maxAleatorios = limiteAleatorios;
         tempoAtual = 0.0;
-        escalonador.add(new Evento(Evento.CHEGADA, 2.0, "Fila1"));
 
-        // Loop Principal
-        while (!escalonador.isEmpty() && gerador.getCount() < maxAleatorios) {
+        carregarFilas();
+        agendarChegadasIniciais();
+
+        while (!escalonador.isEmpty()) {
             Evento ev = escalonador.poll();
 
             acumulaTempo(ev.getTempo() - tempoAtual);
             tempoAtual = ev.getTempo();
 
-            if (ev.getTipo() == Evento.CHEGADA) {
-                chegada(ev);
-            } else if (ev.getTipo() == Evento.SAIDA) {
-                saida(ev);
+            try {
+                if (ev.getTipo() == Evento.CHEGADA) {
+                    chegada(ev);
+                } else if (ev.getTipo() == Evento.SAIDA) {
+                    saida(ev);
+                }
+            } catch (FimDosAleatorios e) {
+                break;
             }
         }
 
-        imprimirResultados();
+        imprimirResultados(titulo);
+    }
+
+    static void carregarFilas() {
+        for (ModeloSimulacao.FilaConfig config : modelo.getFilas().values()) {
+            filas.put(config.nome, new Fila(
+                    config.nome,
+                    config.servers,
+                    config.capacity,
+                    config.minArrival,
+                    config.maxArrival,
+                    config.minService,
+                    config.maxService));
+        }
+    }
+
+    static void agendarChegadasIniciais() {
+        for (Map.Entry<String, Double> chegada : modelo.getChegadas().entrySet()) {
+            escalonador.add(new Evento(Evento.CHEGADA, chegada.getValue(), chegada.getKey()));
+        }
+    }
+
+    static boolean podeGerarAleatorio() {
+        return gerador.getCount() < maxAleatorios;
+    }
+
+    static double proximoAleatorio() {
+        if (!podeGerarAleatorio()) {
+            throw new FimDosAleatorios();
+        }
+        return gerador.proximo();
+    }
+
+    static double intervalo(double min, double max) {
+        return min + proximoAleatorio() * (max - min);
     }
 
     static void acumulaTempo(double delta) {
@@ -57,82 +110,90 @@ public class Simulador {
     }
 
     static void chegada(Evento ev) {
-        Fila f = filas.get(ev.getNomeFila());
-
-        if (ev.getNomeFila().equals("Fila1") && gerador.getCount() < maxAleatorios) {
-            double proximaChegada = tempoAtual + gerador.intervalo(f.minArrival(), f.maxArrival());
-            escalonador.add(new Evento(Evento.CHEGADA, proximaChegada, "Fila1"));
+        Fila fila = filas.get(ev.getNomeFila());
+        if (fila == null) {
+            throw new IllegalArgumentException("Evento para fila inexistente: " + ev.getNomeFila());
         }
 
-        if (f.status() < f.capacity()) {
-            f.in();
-            if (f.status() <= f.servers()) {
-                if (gerador.getCount() < maxAleatorios) {
-                    double fimServico = tempoAtual + gerador.intervalo(f.minService(), f.maxService());
-                    escalonador.add(new Evento(Evento.SAIDA, fimServico, f.getNomeFila()));
-                }
+        entrarNaFila(fila);
+        agendarProximaChegadaExterna(fila);
+    }
+
+    static void agendarProximaChegadaExterna(Fila fila) {
+        if (!modelo.temChegadaExterna(fila.getNomeFila())) {
+            return;
+        }
+
+        double proximaChegada = tempoAtual + intervalo(fila.minArrival(), fila.maxArrival());
+        escalonador.add(new Evento(Evento.CHEGADA, proximaChegada, fila.getNomeFila()));
+    }
+
+    static void entrarNaFila(Fila fila) {
+        if (fila.status() < fila.capacity()) {
+            fila.in();
+            if (fila.status() <= fila.servers()) {
+                agendarFimServico(fila);
             }
         } else {
-            f.contaPerda();
+            fila.contaPerda();
         }
     }
 
+    static void agendarFimServico(Fila fila) {
+        String nomeDestino = sortearProximoDestino(fila.getNomeFila());
+        double fimServico = tempoAtual + intervalo(fila.minService(), fila.maxService());
+        escalonador.add(new Evento(Evento.SAIDA, fimServico, fila.getNomeFila(), nomeDestino));
+    }
+
     static String sortearProximoDestino(String origem) {
-        double rnd = gerador.proximo();
-
-        switch (origem) {
-            case "Fila1":
-                return (rnd <= 0.8) ? "Fila2" : "Fila3";
-
-            case "Fila2":
-                if (rnd <= 0.3) return "Fila1";
-                if (rnd <= 0.8) return "Fila2";
-                return null;
-
-            case "Fila3":
-                if (rnd <= 0.7) return "Fila2";
-                return null;
-
-            default:
-                return null;
+        List<ModeloSimulacao.Rota> rotas = modelo.getRotas(origem);
+        if (rotas.isEmpty()) {
+            return null;
         }
+
+        if (rotas.size() == 1 && rotas.get(0).probability >= 1.0) {
+            return rotas.get(0).target;
+        }
+
+        double rnd = proximoAleatorio();
+
+        for (ModeloSimulacao.Rota rota : rotas) {
+            if (rnd <= rota.probability) {
+                return rota.target;
+            }
+            rnd -= rota.probability;
+        }
+
+        return null;
     }
 
     static void saida(Evento ev) {
         Fila origem = filas.get(ev.getNomeFila());
+        if (origem == null) {
+            throw new IllegalArgumentException("Evento para fila inexistente: " + ev.getNomeFila());
+        }
+
         origem.out();
 
         if (origem.status() >= origem.servers()) {
-            if (gerador.getCount() < maxAleatorios) {
-                double tempoServico = tempoAtual + gerador.intervalo(origem.minService(), origem.maxService());
-                escalonador.add(new Evento(Evento.SAIDA, tempoServico, origem.getNomeFila()));
-            }
+            agendarFimServico(origem);
         }
 
-        if (gerador.getCount() < maxAleatorios) {
-            String nomeDestino = sortearProximoDestino(origem.getNomeFila());
-
-            if (nomeDestino != null) {
-                Fila destino = filas.get(nomeDestino);
-
-                if (destino.status() < destino.capacity()) {
-                    destino.in();
-                    if (destino.status() <= destino.servers()) {
-                        if (gerador.getCount() < maxAleatorios) {
-                            double tempoServicoDest = tempoAtual + gerador.intervalo(destino.minService(), destino.maxService());
-                            escalonador.add(new Evento(Evento.SAIDA, tempoServicoDest, destino.getNomeFila()));
-                        }
-                    }
-                } else {
-                    destino.contaPerda();
-                }
+        String nomeDestino = ev.getNomeDestino();
+        if (nomeDestino != null) {
+            Fila destino = filas.get(nomeDestino);
+            if (destino == null) {
+                throw new IllegalArgumentException("Destino inexistente: " + nomeDestino);
             }
+            entrarNaFila(destino);
         }
     }
 
-    static void imprimirResultados() {
-        System.out.println("Tempo global da simulação: " + tempoAtual);
-        System.out.println("Aleatórios utilizados: " + gerador.getCount());
+    static void imprimirResultados(String titulo) {
+        System.out.println("========================================");
+        System.out.println(titulo);
+        System.out.println("Tempo global da simulacao: " + tempoAtual);
+        System.out.println("Aleatorios utilizados: " + gerador.getCount());
 
         for (String nomeFila : filas.keySet()) {
             Fila f = filas.get(nomeFila);
@@ -156,9 +217,12 @@ public class Simulador {
 
         for (Integer estado : estados) {
             double tempo = times.get(estado);
-            double prob = tempo / totalTempoFila;
-            System.out.printf("%-10d %-20.4f %-15.6f%n", estado, tempo, prob);
+            double probPercentual = totalTempoFila > 0 ? (tempo / totalTempoFila) * 100.0 : 0.0;
+            System.out.printf("%-10d %-20.4f %14.2f%%%n", estado, tempo, probPercentual);
         }
         System.out.println("Perdas: " + fila.loss());
+    }
+
+    private static class FimDosAleatorios extends RuntimeException {
     }
 }
