@@ -9,7 +9,7 @@ public class Simulador {
     static int maxAleatorios;
 
     public static void main(String[] args) {
-        long semente = 12345L;
+        long semente = 51232312;
         maxAleatorios = 100_000;
 
         if (args.length >= 1) {
@@ -37,9 +37,9 @@ public class Simulador {
             tempoAtual = ev.getTempo();
 
             if (ev.getTipo() == Evento.CHEGADA) {
-                processarChegada(ev);
+                chegada(ev);
             } else if (ev.getTipo() == Evento.SAIDA) {
-                processarSaida(ev);
+                saida(ev);
             }
         }
 
@@ -56,7 +56,7 @@ public class Simulador {
         }
     }
 
-    static void processarChegada(Evento ev) {
+    static void chegada(Evento ev) {
         Fila f = filas.get(ev.getNomeFila());
 
         if (ev.getNomeFila().equals("Fila1") && gerador.getCount() < maxAleatorios) {
@@ -66,7 +66,6 @@ public class Simulador {
 
         if (f.status() < f.capacity()) {
             f.in();
-            // Se o servidor estava ocioso, agenda o início do serviço (SAIDA)
             if (f.status() <= f.servers()) {
                 if (gerador.getCount() < maxAleatorios) {
                     double fimServico = tempoAtual + gerador.intervalo(f.minService(), f.maxService());
@@ -99,7 +98,7 @@ public class Simulador {
         }
     }
 
-    static void processarSaida(Evento ev) {
+    static void saida(Evento ev) {
         Fila origem = filas.get(ev.getNomeFila());
         origem.out();
 
@@ -137,7 +136,7 @@ public class Simulador {
 
         for (String nomeFila : filas.keySet()) {
             Fila f = filas.get(nomeFila);
-            imprimirFila(nomeFila, f); // Reutiliza sua lógica de imprimirFila
+            imprimirFila(nomeFila, f);
         }
     }
 
